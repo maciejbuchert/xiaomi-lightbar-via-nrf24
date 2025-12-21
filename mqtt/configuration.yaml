@@ -1,0 +1,18 @@
+mqtt:
+  light:
+    - name: "Xiaomi Lightbar"
+      unique_id: "xiaomi_lightbar"
+      state_topic: "xiaomi/lightbar/state"
+      brightness_state_topic: "xiaomi/lightbar/brightness"
+      color_temp_state_topic: "xiaomi/lightbar/temperature"
+      command_topic: "xiaomi/lightbar/control"
+      brightness_command_topic: "xiaomi/lightbar/brightness/set"
+      color_temp_command_topic: "xiaomi/lightbar/temperature/set"
+      brightness_scale: 255
+      min_mireds: 153
+      max_mireds: 370
+      payload_on: "ON"
+      payload_off: "OFF"
+      optimistic: false
+      qos: 1
+      retain: true

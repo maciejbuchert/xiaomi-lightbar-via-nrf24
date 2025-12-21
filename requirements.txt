@@ -1,0 +1,3 @@
+pyrf24
+crc
+paho-mqtt
