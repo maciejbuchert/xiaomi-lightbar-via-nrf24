@@ -55,10 +55,10 @@ crc16_config = crc.Configuration(
 crc16 = crc.Calculator(crc16_config)
 
 
-def strip_bits(num: int, msb: int, lsb: int):
+def strip_bits(num: int, msb: int, lsb: int, bit_count = 96):
     """Strip msb and lsb bits of an int"""
     
-    mask = (1 << num.bit_length()-msb)-1
+    mask = (1 << bit_count - msb) - 1
     return (num & mask) >> lsb
 
 
@@ -75,7 +75,7 @@ def decode_packet(raw: bytes):
 
     # Strip the preamble and junk bits
     raw_int = int.from_bytes(raw, "big")
-    data = strip_bits(raw_int, 15, 9)
+    data = strip_bits(raw_int, 24, 0)
     
     # Now, the payload is clean and ready to be decoded
     keys = ["id", "separator", "counter", "command", "crc"]
@@ -117,6 +117,7 @@ radio.dynamic_payloads = False
 radio.crc_length = pyrf24.RF24_CRC_DISABLED
 radio.payload_size = 12  # More than necessary, I will strip some bits
 radio.address_width = 5
+radio.set_auto_ack(False)
 radio.listen = True
 radio.open_rx_pipe(1, preamble >> 24)  # 5 first bytes of preable
 radio.print_details()

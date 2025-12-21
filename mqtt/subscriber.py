@@ -40,10 +40,13 @@ class MqttController:
         self.broker = broker
         self.port = port
         self.topic = topic + "/#"
+        self.base_topic = topic
         self.lightbar = lightbar
         # Store the previous control state to avoid sending the same on_off command multiple times
         # we assume the default state to be ON
         self.previous_control_state = "ON"
+        self.current_brightness = 128
+        self.current_temperature = 261
 
         self.client.on_connect = self.on_connect
         self.client.on_message = self.on_message
@@ -53,10 +56,16 @@ class MqttController:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.stop()
 
+    def publish_state(self):
+        self.client.publish(f"{self.base_topic}/state", self.previous_control_state, retain=True)
+        self.client.publish(f"{self.base_topic}/brightness", self.current_brightness, retain=True)
+        self.client.publish(f"{self.base_topic}/temperature", self.current_temperature, retain=True)
+
     def on_connect(self, client, userdata, flags, rc, properties):
         if rc == 0:
             print("Connected to MQTT Broker!")
             client.subscribe(self.topic)
+            self.publish_state()
         else:
             print(f"Failed to connect, return code: {rc}")
             self.stop()
@@ -68,21 +77,27 @@ class MqttController:
                 if self.previous_control_state != "ON":
                     self.lightbar.on_off()
                     self.previous_control_state = "ON"
+                    self.publish_state()
             if msg.payload == b"OFF":
                 if self.previous_control_state != "OFF":
                     self.lightbar.on_off()
                     self.previous_control_state = "OFF"
+                    self.publish_state()
 
         elif msg.topic == self.topic.replace("#", "brightness/set"):
             val = int(msg.payload)
+            self.current_brightness = val
             scaled_val = round((val / 255) * 15)
             print(f"Brightness: {scaled_val}")
             self.lightbar.brightness(scaled_val)
+            self.publish_state()
         elif msg.topic == self.topic.replace("#", "temperature/set"):
             val = int(msg.payload)
+            self.current_temperature = val
             scaled_val = scale_value(val)
             print(f"temperature: {scaled_val}")
             self.lightbar.color_temp(scaled_val)
+            self.publish_state()
 
     def start(self):
         try:

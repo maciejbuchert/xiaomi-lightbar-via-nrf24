@@ -31,7 +31,8 @@ This library enables control of the Xiaomi Lightbar from a Raspberry Pi or simil
 
 Connect the Raspberry Pi to the nRF24L01 as shown [here](https://www.laboratoriogluon.com/conectar-raspberry-pi-3-a-nrf24l01).
 
-In this documentation it will be assumed that the SPI0 bus is used, and therefore `csn_pin=0`. The chip enable will be connected to GPIO25 (`ce_pin=25`). See [here](https://nrf24.github.io/RF24/md_docs_rpi_general.html) for more details.
+```
+```
 
 ## Installation
 
@@ -196,6 +197,52 @@ If your MQTT broker has no password, keep username and password empty.
 
 If everything is configured correctly, you should see a light entity named "Xiaomi Lightbar" in Home Assistant. You can now control your light bar from Home Assistant!
 
+### Running as a systemd Service
+
+To run the MQTT subscriber as a background service that starts automatically on boot, create a systemd service file.
+
+Create a file `/etc/systemd/system/xiaomi-lightbar.service` with the following content (replace `{$USER}`, `{$MQTT_SERVER}`, `{$MQTT_PORT}`, `{$MQTT_USERNAME}`, `{$MQTT_PASSWORD}`, and `{$LIGHTBAR_ID}` with your actual values):
+
+```ini
+[Unit]
+Description=Xiaomi Lightbar MQTT Subscriber
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$USER
+WorkingDirectory=/home/{$USER}/xiaomi-lightbar-via-nrf24
+ExecStart=/usr/bin/python3 /home/{$USER}/xiaomi-lightbar-via-nrf24/mqtt/subscriber.py --broker {$MQTT_SERVER} --port {$MQTT_PORT} --username {$MQTT_USERNAME} --password {$MQTT_PASSWORD} --remote_id {$LIGHTBAR_ID}
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start the service:
+
+```sh
+sudo systemctl daemon-reload
+sudo systemctl enable xiaomi-lightbar.service
+sudo systemctl start xiaomi-lightbar.service
+```
+
+Check the status:
+
+```sh
+sudo systemctl status xiaomi-lightbar.service
+```
+
+View logs:
+
+```sh
+journalctl -u xiaomi-lightbar.service -f
+```
+
 ## Scripts
 
 ### Test Lightbar
@@ -224,29 +271,6 @@ Options:
 - `-p, --power` - Power level: MIN, LOW, HIGH, MAX (default: LOW)
 
 ## Technical Details
-
-### Packet Structure
-
-A baseband packet (17 bytes) is composed of:
-- Preamble (8 bytes), common to all devices: `0x533914DD1C493412`
-- Remote id (3 bytes), hardcoded in the remote
-- Separator (1 byte), common to all devices: `0xFF`
-- Sequence counter (1 byte)
-- Command id (2 bytes)
-- CRC16 checksum (2 bytes)
-
-### Command Codes
-
-| Command | Code          | Default |
-|---------|---------------|---------|
-| on_off  | 0x01??        | 0x0100  |
-| cooler  | 0x0200 + step | 0x0201  |
-| warmer  | 0x0300 - step | 0x03FF  |
-| higher  | 0x0400 + step | 0x0401  |
-| lower   | 0x0500 - step | 0x05FF  |
-| reset   | 0x06??        | 0x0600  |
-
-Step is a number from 1 to 15, encoding the turning speed of the wheel.
 
 ### Radio Configuration
 
