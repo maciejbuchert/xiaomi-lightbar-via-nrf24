@@ -31,9 +31,6 @@ This library enables control of the Xiaomi Lightbar from a Raspberry Pi or simil
 
 Connect the Raspberry Pi to the nRF24L01 as shown [here](https://www.laboratoriogluon.com/conectar-raspberry-pi-3-a-nrf24l01).
 
-```
-```
-
 ## Installation
 
 ### Dependencies

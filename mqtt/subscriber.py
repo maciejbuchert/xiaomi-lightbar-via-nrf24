@@ -57,9 +57,9 @@ class MqttController:
         self.stop()
 
     def publish_state(self):
-        self.client.publish(f"{self.base_topic}/state", self.previous_control_state, retain=True)
-        self.client.publish(f"{self.base_topic}/brightness", self.current_brightness, retain=True)
-        self.client.publish(f"{self.base_topic}/temperature", self.current_temperature, retain=True)
+        self.client.publish(f"{self.base_topic}/state", self.previous_control_state, qos=1, retain=True)
+        self.client.publish(f"{self.base_topic}/brightness", self.current_brightness, qos=1, retain=True)
+        self.client.publish(f"{self.base_topic}/temperature", self.current_temperature, qos=1, retain=True)
 
     def on_connect(self, client, userdata, flags, rc, properties):
         if rc == 0:

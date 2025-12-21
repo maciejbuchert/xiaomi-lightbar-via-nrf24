@@ -55,7 +55,7 @@ crc16_config = crc.Configuration(
 crc16 = crc.Calculator(crc16_config)
 
 
-def strip_bits(num: int, msb: int, lsb: int, bit_count = 96):
+def strip_bits(num: int, msb: int, lsb: int, bit_count=96):
     """Strip msb and lsb bits of an int"""
     
     mask = (1 << bit_count - msb) - 1
