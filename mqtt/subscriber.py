@@ -112,8 +112,9 @@ def main():
     try:
         with MqttController(BROKER, PORT, USERNAME, PASSWORD, TOPIC, lightbar) as controller:
             controller.start()
+            import time
             while True:  # Keep the program running
-                pass
+                time.sleep(1)  # Sleep to reduce CPU usage
     except KeyboardInterrupt:
         print("\nInterrupted by user. Exiting...")
 

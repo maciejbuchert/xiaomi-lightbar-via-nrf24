@@ -11,7 +11,7 @@ description = """
 
 parser = argparse.ArgumentParser(description=description, formatter_class=argparse.RawDescriptionHelpFormatter)
 
-parser.add_argument("-c", "--channel", type=int,default=6, help="6, 15, 43, 68 (or +1) -> 2406 MHz, 2043 MHz, 2068 MH")
+parser.add_argument("-c", "--channel", type=int, default=6, help="6, 15, 43, 68 (or +1) -> 2406 MHz, 2415 MHz, 2443 MHz, 2468 MHz")
 parser.add_argument("-p", "--power", type=str, default="LOW", choices=["MIN", "LOW", "HIGH", "MAX"], help="Change the power level.")
 parser.add_argument("-i", "--id", type=lambda x: int(x, 16), default=0xABCDEF, help="ID of the remote.")
 

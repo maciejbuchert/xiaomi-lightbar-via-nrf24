@@ -25,7 +25,7 @@ description = """
 
 parser = argparse.ArgumentParser(description=description, formatter_class=argparse.RawDescriptionHelpFormatter)
 
-parser.add_argument("-c", "--channel", type=int,default=6, help="6 (default), 15, 43, 68 (or +1) -> 2406 MHz, 2043 MHz, 2068 MH")
+parser.add_argument("-c", "--channel", type=int, default=6, help="6 (default), 15, 43, 68 (or +1) -> 2406 MHz, 2415 MHz, 2443 MHz, 2468 MHz")
 parser.add_argument("-p", "--power", type=str, default="LOW", choices=["MIN", "LOW", "HIGH", "MAX"], help="Change the power level")
 
 args = parser.parse_args()
@@ -40,7 +40,7 @@ elif args.power == "HIGH":
 elif args.power == "MAX":
     POW = pyrf24.RF24_PA_MAX
 
-CHANNEL = args.channel # 6 (default), 15, 43, 68 (or +1) -> 2406 MHz, 2043 MHz, 2068 MHz
+CHANNEL = args.channel # 6 (default), 15, 43, 68 (or +1) -> 2406 MHz, 2415 MHz, 2443 MHz, 2468 MHz
 CE_PIN = 25
 CS_PIN = 0
 
