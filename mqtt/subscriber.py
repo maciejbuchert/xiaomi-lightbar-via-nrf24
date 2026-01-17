@@ -53,7 +53,7 @@ lightbar = Lightbar(ce_pin=CE_PIN, csn_pin=CSN_PIN, remote_id=REMOTE_ID)
 
 def strip_bits(num: int, msb: int, lsb: int, bit_count=96):
     """Strip msb and lsb bits of an int"""
-    mask = (1 << bit_count - msb) - 1
+    mask = (1 << (bit_count - msb)) - 1
     return (num & mask) >> lsb
 
 
@@ -61,11 +61,10 @@ def decode_packet(raw: bytes):
     """Decode a received packet
     
     Based on scan_lightbar_remote.py logic:
-    - First 15 bits (MSB) are preamble trailing ones
-    - 9 bytes = 72 bits are the payload
-    - Remaining 9 bits (LSB) are junk
+    - First 24 bits (MSB) are preamble trailing bits
+    - 9 bytes = 72 bits are the payload (includes some junk in LSB)
     """
-    # Strip the preamble and junk bits
+    # Strip the preamble bits (24 MSB)
     raw_int = int.from_bytes(raw, "big")
     data = strip_bits(raw_int, 24, 0)
     
@@ -87,6 +86,13 @@ def validate_packet_crc(packet: dict) -> bool:
     return packet["crc"] == crc16.checksum(x)
 
 class MqttController:
+    # Configuration constants
+    TX_COMPLETION_DELAY = 0.3  # Delay in seconds for TX operations to complete
+    POLLING_INTERVAL = 0.05  # Radio polling interval in seconds (50ms)
+    TEMP_RANGE = 370 - 153  # Temperature range in mireds
+    BRIGHTNESS_RANGE = 255  # Brightness range (0-255)
+    MAX_STEPS = 15  # Maximum adjustment steps for commands
+    
     def __init__(self, broker, port, username, password, topic, lightbar, ce_pin, csn_pin):
         self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
         if username != "":
@@ -135,8 +141,8 @@ class MqttController:
             # Restore TX configuration (as set by Lightbar.__init__)
             self.rx_radio.dynamic_payloads = False
             self.rx_radio.payload_size = 17
-            # Note: CRC length is not explicitly set by Lightbar, so we leave it as default
-            # The open_tx_pipe is already set by Lightbar initialization
+            # Note: Lightbar class doesn't explicitly set CRC, so we also don't set it here
+            # to maintain consistency with the original TX behavior
             
     def send_command(self, command_func):
         """Send a command while temporarily switching to TX mode"""
@@ -144,8 +150,8 @@ class MqttController:
         try:
             command_func()
         finally:
-            # Give a small delay for transmission to complete
-            time.sleep(0.3)
+            # Give time for transmission to complete
+            time.sleep(self.TX_COMPLETION_DELAY)
             self.configure_radio_for_rx()
     
     def __enter__(self):
@@ -220,10 +226,10 @@ class MqttController:
             # Cooler color temperature (0x0201 to 0x020F)
             elif cmd_type == 0x02:
                 step = cmd_value
-                if 1 <= step <= 15:
+                if 1 <= step <= self.MAX_STEPS:
                     # Cooler means higher temperature value
-                    # Map step to temperature change
-                    temp_change = step * (370 - 153) / 15 / 15  # Divide range into steps
+                    # Each step adjusts temperature by a fraction of the range
+                    temp_change = step * self.TEMP_RANGE / self.MAX_STEPS / self.MAX_STEPS
                     self.current_temperature = min(370, self.current_temperature + temp_change)
                     print(f"Temperature cooler: {self.current_temperature}")
                     self.publish_state()
@@ -231,9 +237,9 @@ class MqttController:
             # Warmer color temperature (0x03FF to 0x03F1)
             elif cmd_type == 0x03:
                 step = 256 - cmd_value  # 0xFF=1, 0xFE=2, ..., 0xF1=15
-                if 1 <= step <= 15:
+                if 1 <= step <= self.MAX_STEPS:
                     # Warmer means lower temperature value
-                    temp_change = step * (370 - 153) / 15 / 15
+                    temp_change = step * self.TEMP_RANGE / self.MAX_STEPS / self.MAX_STEPS
                     self.current_temperature = max(153, self.current_temperature - temp_change)
                     print(f"Temperature warmer: {self.current_temperature}")
                     self.publish_state()
@@ -241,19 +247,19 @@ class MqttController:
             # Higher brightness (0x0401 to 0x040F)
             elif cmd_type == 0x04:
                 step = cmd_value
-                if 1 <= step <= 15:
+                if 1 <= step <= self.MAX_STEPS:
                     # Higher brightness
-                    brightness_change = step * 255 / 15 / 15  # Divide range into steps
-                    self.current_brightness = min(255, self.current_brightness + brightness_change)
+                    brightness_change = step * self.BRIGHTNESS_RANGE / self.MAX_STEPS / self.MAX_STEPS
+                    self.current_brightness = min(self.BRIGHTNESS_RANGE, self.current_brightness + brightness_change)
                     print(f"Brightness higher: {self.current_brightness}")
                     self.publish_state()
             
             # Lower brightness (0x05FF to 0x05F1)
             elif cmd_type == 0x05:
                 step = 256 - cmd_value  # 0xFF=1, 0xFE=2, ..., 0xF1=15
-                if 1 <= step <= 15:
+                if 1 <= step <= self.MAX_STEPS:
                     # Lower brightness
-                    brightness_change = step * 255 / 15 / 15
+                    brightness_change = step * self.BRIGHTNESS_RANGE / self.MAX_STEPS / self.MAX_STEPS
                     self.current_brightness = max(0, self.current_brightness - brightness_change)
                     print(f"Brightness lower: {self.current_brightness}")
                     self.publish_state()
@@ -289,7 +295,7 @@ class MqttController:
                     else:
                         print("Received packet with invalid CRC, ignoring")
                         
-                time.sleep(0.05)  # 50ms polling interval
+                time.sleep(self.POLLING_INTERVAL)
             except Exception as e:
                 print(f"Error in knob listener: {e}")
                 time.sleep(0.1)
