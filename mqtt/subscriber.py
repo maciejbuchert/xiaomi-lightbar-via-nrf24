@@ -89,9 +89,11 @@ class MqttController:
     # Configuration constants
     TX_COMPLETION_DELAY = 0.3  # Delay in seconds for TX operations to complete
     POLLING_INTERVAL = 0.05  # Radio polling interval in seconds (50ms)
+    THREAD_JOIN_TIMEOUT = 2  # Timeout for thread join on shutdown (seconds)
     TEMP_RANGE = 370 - 153  # Temperature range in mireds
     BRIGHTNESS_RANGE = 255  # Brightness range (0-255)
     MAX_STEPS = 15  # Maximum adjustment steps for commands
+    STEP_DIVISOR = 15  # Divisor to scale step increments (step * range / divisor)
     
     def __init__(self, broker, port, username, password, topic, lightbar, ce_pin, csn_pin):
         self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
@@ -138,11 +140,12 @@ class MqttController:
         """Configure radio for transmitting commands"""
         with self.radio_lock:
             self.rx_radio.listen = False
-            # Restore TX configuration (as set by Lightbar.__init__)
+            # Restore TX configuration
             self.rx_radio.dynamic_payloads = False
             self.rx_radio.payload_size = 17
-            # Note: Lightbar class doesn't explicitly set CRC, so we also don't set it here
-            # to maintain consistency with the original TX behavior
+            # Match RX configuration: explicitly disable CRC
+            # (The Lightbar transmitter doesn't use CRC either)
+            self.rx_radio.crc_length = pyrf24.RF24_CRC_DISABLED
             
     def send_command(self, command_func):
         """Send a command while temporarily switching to TX mode"""
@@ -228,9 +231,9 @@ class MqttController:
                 step = cmd_value
                 if 1 <= step <= self.MAX_STEPS:
                     # Cooler means higher temperature value
-                    # Each step adjusts temperature by a fraction of the range
-                    temp_change = step * self.TEMP_RANGE / self.MAX_STEPS / self.MAX_STEPS
-                    self.current_temperature = min(370, self.current_temperature + temp_change)
+                    # Calculate change: step size proportional to the step value
+                    temp_change = step * self.TEMP_RANGE / self.STEP_DIVISOR
+                    self.current_temperature = int(min(370, self.current_temperature + temp_change))
                     print(f"Temperature cooler: {self.current_temperature}")
                     self.publish_state()
             
@@ -239,8 +242,8 @@ class MqttController:
                 step = 256 - cmd_value  # 0xFF=1, 0xFE=2, ..., 0xF1=15
                 if 1 <= step <= self.MAX_STEPS:
                     # Warmer means lower temperature value
-                    temp_change = step * self.TEMP_RANGE / self.MAX_STEPS / self.MAX_STEPS
-                    self.current_temperature = max(153, self.current_temperature - temp_change)
+                    temp_change = step * self.TEMP_RANGE / self.STEP_DIVISOR
+                    self.current_temperature = int(max(153, self.current_temperature - temp_change))
                     print(f"Temperature warmer: {self.current_temperature}")
                     self.publish_state()
             
@@ -249,8 +252,8 @@ class MqttController:
                 step = cmd_value
                 if 1 <= step <= self.MAX_STEPS:
                     # Higher brightness
-                    brightness_change = step * self.BRIGHTNESS_RANGE / self.MAX_STEPS / self.MAX_STEPS
-                    self.current_brightness = min(self.BRIGHTNESS_RANGE, self.current_brightness + brightness_change)
+                    brightness_change = step * self.BRIGHTNESS_RANGE / self.STEP_DIVISOR
+                    self.current_brightness = int(min(self.BRIGHTNESS_RANGE, self.current_brightness + brightness_change))
                     print(f"Brightness higher: {self.current_brightness}")
                     self.publish_state()
             
@@ -259,8 +262,8 @@ class MqttController:
                 step = 256 - cmd_value  # 0xFF=1, 0xFE=2, ..., 0xF1=15
                 if 1 <= step <= self.MAX_STEPS:
                     # Lower brightness
-                    brightness_change = step * self.BRIGHTNESS_RANGE / self.MAX_STEPS / self.MAX_STEPS
-                    self.current_brightness = max(0, self.current_brightness - brightness_change)
+                    brightness_change = step * self.BRIGHTNESS_RANGE / self.STEP_DIVISOR
+                    self.current_brightness = int(max(0, self.current_brightness - brightness_change))
                     print(f"Brightness lower: {self.current_brightness}")
                     self.publish_state()
             
@@ -318,7 +321,7 @@ class MqttController:
         # Stop knob listener thread
         if self.listener_thread is not None:
             self.listener_running = False
-            self.listener_thread.join(timeout=2)
+            self.listener_thread.join(timeout=self.THREAD_JOIN_TIMEOUT)
         
         self.client.loop_stop()
         self.client.disconnect()
