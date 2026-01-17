@@ -95,7 +95,7 @@ class MqttController:
     MAX_STEPS = 15  # Maximum adjustment steps for commands
     STEP_DIVISOR = 15  # Divisor to scale step increments (step * range / divisor)
     
-    def __init__(self, broker, port, username, password, topic, lightbar, ce_pin, csn_pin):
+    def __init__(self, broker, port, username, password, topic, lightbar):
         self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
         if username != "":
             self.client.username_pw_set(username, password)
@@ -341,9 +341,8 @@ def scale_value(t):
 
 def main():
     try:
-        with MqttController(BROKER, PORT, USERNAME, PASSWORD, TOPIC, lightbar, CE_PIN, CSN_PIN) as controller:
+        with MqttController(BROKER, PORT, USERNAME, PASSWORD, TOPIC, lightbar) as controller:
             controller.start()
-            import time
             while True:  # Keep the program running
                 time.sleep(1)  # Sleep to reduce CPU usage
     except KeyboardInterrupt:
