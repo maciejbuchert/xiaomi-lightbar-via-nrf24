@@ -132,11 +132,11 @@ class MqttController:
         """Configure radio for transmitting commands"""
         with self.radio_lock:
             self.rx_radio.listen = False
-            # Restore TX configuration
+            # Restore TX configuration (as set by Lightbar.__init__)
             self.rx_radio.dynamic_payloads = False
             self.rx_radio.payload_size = 17
-            self.rx_radio.crc_length = pyrf24.RF24_CRC_16  # Default CRC
-            self.rx_radio.set_auto_ack(False)  # Already set by Lightbar
+            # Note: CRC length is not explicitly set by Lightbar, so we leave it as default
+            # The open_tx_pipe is already set by Lightbar initialization
             
     def send_command(self, command_func):
         """Send a command while temporarily switching to TX mode"""
@@ -274,16 +274,21 @@ class MqttController:
         
         while self.listener_running:
             try:
+                received = None
                 with self.radio_lock:
                     if self.rx_radio.listen:  # Only check if in RX mode
                         has_payload, pipe_number = self.rx_radio.available_pipe()
                         if has_payload:
                             received = self.rx_radio.read(self.rx_radio.payload_size)
-                            packet = decode_packet(received)
-                            if validate_packet_crc(packet):
-                                self.process_knob_command(packet["command"])
-                            else:
-                                print("Received packet with invalid CRC, ignoring")
+                
+                # Process outside the lock to avoid blocking TX operations
+                if received is not None:
+                    packet = decode_packet(received)
+                    if validate_packet_crc(packet):
+                        self.process_knob_command(packet["command"])
+                    else:
+                        print("Received packet with invalid CRC, ignoring")
+                        
                 time.sleep(0.05)  # 50ms polling interval
             except Exception as e:
                 print(f"Error in knob listener: {e}")
