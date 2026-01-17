@@ -1,6 +1,11 @@
 import paho.mqtt.client as mqtt
 from xiaomi_lightbar import Lightbar
 import argparse
+import threading
+import time
+import pyrf24
+import crc
+from struct import unpack
 
 description = """
     MQTT subscriber for Xiaomi Lightbar Home Assistant MQTT Light integration.
@@ -29,11 +34,60 @@ USERNAME = args.username
 PASSWORD = args.password
 TOPIC = args.topic
 
+# CRC16 configuration for packet validation
+crc16_config = crc.Configuration(
+    width=16,
+    polynomial=0x1021,
+    init_value=0xFFFE,
+    final_xor_value=0x0000,
+    reverse_input=False,
+    reverse_output=False,
+)
+crc16 = crc.Calculator(crc16_config)
+
+# Preamble for packet matching
+preamble = 0x533914DD1C493412  # 8 bytes
+
 # Create Lightbar and MqttController instances
 lightbar = Lightbar(ce_pin=CE_PIN, csn_pin=CSN_PIN, remote_id=REMOTE_ID)
 
+def strip_bits(num: int, msb: int, lsb: int, bit_count=96):
+    """Strip msb and lsb bits of an int"""
+    mask = (1 << bit_count - msb) - 1
+    return (num & mask) >> lsb
+
+
+def decode_packet(raw: bytes):
+    """Decode a received packet
+    
+    Based on scan_lightbar_remote.py logic:
+    - First 15 bits (MSB) are preamble trailing ones
+    - 9 bytes = 72 bits are the payload
+    - Remaining 9 bits (LSB) are junk
+    """
+    # Strip the preamble and junk bits
+    raw_int = int.from_bytes(raw, "big")
+    data = strip_bits(raw_int, 24, 0)
+    
+    # Decode the payload
+    keys = ["id", "separator", "counter", "command", "crc"]
+    values = unpack('>3s s s 2s 2s', data.to_bytes(9, 'big'))
+    values = (int.from_bytes(x, "big") for x in values)
+    packet = dict(zip(keys, values))
+    return packet
+
+
+def validate_packet_crc(packet: dict) -> bool:
+    """Check the CRC of a packet"""
+    x = preamble.to_bytes(8, 'big')
+    x += packet["id"].to_bytes(3, 'big')
+    x += packet["separator"].to_bytes(1, 'big')
+    x += packet["counter"].to_bytes(1, 'big')
+    x += packet["command"].to_bytes(2, 'big')
+    return packet["crc"] == crc16.checksum(x)
+
 class MqttController:
-    def __init__(self, broker, port, username, password, topic, lightbar):
+    def __init__(self, broker, port, username, password, topic, lightbar, ce_pin, csn_pin):
         self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
         if username != "":
             self.client.username_pw_set(username, password)
@@ -47,9 +101,53 @@ class MqttController:
         self.previous_control_state = "ON"
         self.current_brightness = 128
         self.current_temperature = 261
+        
+        # Use the lightbar's radio for receiving as well
+        # We'll configure it for RX when not transmitting
+        self.rx_radio = self.lightbar.radio
+        
+        # Thread control
+        self.listener_thread = None
+        self.listener_running = False
+        self.state_lock = threading.Lock()  # Protect shared state
+        self.radio_lock = threading.Lock()  # Protect radio access
 
         self.client.on_connect = self.on_connect
         self.client.on_message = self.on_message
+    
+    def configure_radio_for_rx(self):
+        """Configure radio for receiving knob commands"""
+        with self.radio_lock:
+            self.rx_radio.listen = False  # Stop listening first
+            # Configure for RX based on scan_lightbar_remote.py
+            self.rx_radio.dynamic_payloads = False
+            self.rx_radio.crc_length = pyrf24.RF24_CRC_DISABLED
+            self.rx_radio.payload_size = 12
+            self.rx_radio.address_width = 5
+            self.rx_radio.set_auto_ack(False)
+            self.rx_radio.open_rx_pipe(1, preamble >> 24)  # 5 first bytes of preamble
+            self.rx_radio.listen = True
+    
+    def configure_radio_for_tx(self):
+        """Configure radio for transmitting commands"""
+        with self.radio_lock:
+            self.rx_radio.listen = False
+            # Restore TX configuration
+            self.rx_radio.dynamic_payloads = False
+            self.rx_radio.payload_size = 17
+            self.rx_radio.crc_length = pyrf24.RF24_CRC_16  # Default CRC
+            self.rx_radio.set_auto_ack(False)  # Already set by Lightbar
+            
+    def send_command(self, command_func):
+        """Send a command while temporarily switching to TX mode"""
+        self.configure_radio_for_tx()
+        try:
+            command_func()
+        finally:
+            # Give a small delay for transmission to complete
+            time.sleep(0.3)
+            self.configure_radio_for_rx()
+    
     def __enter__(self):
         return self
 
@@ -72,41 +170,145 @@ class MqttController:
 
     def on_message(self, client, userdata, msg):
         print(f"{msg.topic} {msg.payload}")
-        if msg.topic == self.topic.replace("#", "control"):
-            if msg.payload == b"ON":
-                if self.previous_control_state != "ON":
-                    self.lightbar.on_off()
-                    self.previous_control_state = "ON"
-                    self.publish_state()
-            if msg.payload == b"OFF":
-                if self.previous_control_state != "OFF":
-                    self.lightbar.on_off()
-                    self.previous_control_state = "OFF"
-                    self.publish_state()
+        with self.state_lock:
+            if msg.topic == self.topic.replace("#", "control"):
+                if msg.payload == b"ON":
+                    if self.previous_control_state != "ON":
+                        self.send_command(lambda: self.lightbar.on_off())
+                        self.previous_control_state = "ON"
+                        self.publish_state()
+                if msg.payload == b"OFF":
+                    if self.previous_control_state != "OFF":
+                        self.send_command(lambda: self.lightbar.on_off())
+                        self.previous_control_state = "OFF"
+                        self.publish_state()
 
-        elif msg.topic == self.topic.replace("#", "brightness/set"):
-            val = int(msg.payload)
-            self.current_brightness = val
-            scaled_val = round((val / 255) * 15)
-            print(f"Brightness: {scaled_val}")
-            self.lightbar.brightness(scaled_val)
-            self.publish_state()
-        elif msg.topic == self.topic.replace("#", "temperature/set"):
-            val = int(msg.payload)
-            self.current_temperature = val
-            scaled_val = scale_value(val)
-            print(f"temperature: {scaled_val}")
-            self.lightbar.color_temp(scaled_val)
-            self.publish_state()
+            elif msg.topic == self.topic.replace("#", "brightness/set"):
+                val = int(msg.payload)
+                self.current_brightness = val
+                scaled_val = round((val / 255) * 15)
+                print(f"Brightness: {scaled_val}")
+                self.send_command(lambda: self.lightbar.brightness(scaled_val))
+                self.publish_state()
+            elif msg.topic == self.topic.replace("#", "temperature/set"):
+                val = int(msg.payload)
+                self.current_temperature = val
+                scaled_val = scale_value(val)
+                print(f"temperature: {scaled_val}")
+                self.send_command(lambda: self.lightbar.color_temp(scaled_val))
+                self.publish_state()
+
+    def process_knob_command(self, command: int):
+        """Process a command received from the physical knob/remote"""
+        print(f"Knob command received: {hex(command)}")
+        
+        with self.state_lock:
+            # Extract command type and value
+            cmd_type = (command >> 8) & 0xFF
+            cmd_value = command & 0xFF
+            
+            # On/Off toggle (0x0100)
+            if cmd_type == 0x01:
+                # Toggle state
+                if self.previous_control_state == "ON":
+                    self.previous_control_state = "OFF"
+                else:
+                    self.previous_control_state = "ON"
+                print(f"State toggled to: {self.previous_control_state}")
+                self.publish_state()
+            
+            # Cooler color temperature (0x0201 to 0x020F)
+            elif cmd_type == 0x02:
+                step = cmd_value
+                if 1 <= step <= 15:
+                    # Cooler means higher temperature value
+                    # Map step to temperature change
+                    temp_change = step * (370 - 153) / 15 / 15  # Divide range into steps
+                    self.current_temperature = min(370, self.current_temperature + temp_change)
+                    print(f"Temperature cooler: {self.current_temperature}")
+                    self.publish_state()
+            
+            # Warmer color temperature (0x03FF to 0x03F1)
+            elif cmd_type == 0x03:
+                step = 256 - cmd_value  # 0xFF=1, 0xFE=2, ..., 0xF1=15
+                if 1 <= step <= 15:
+                    # Warmer means lower temperature value
+                    temp_change = step * (370 - 153) / 15 / 15
+                    self.current_temperature = max(153, self.current_temperature - temp_change)
+                    print(f"Temperature warmer: {self.current_temperature}")
+                    self.publish_state()
+            
+            # Higher brightness (0x0401 to 0x040F)
+            elif cmd_type == 0x04:
+                step = cmd_value
+                if 1 <= step <= 15:
+                    # Higher brightness
+                    brightness_change = step * 255 / 15 / 15  # Divide range into steps
+                    self.current_brightness = min(255, self.current_brightness + brightness_change)
+                    print(f"Brightness higher: {self.current_brightness}")
+                    self.publish_state()
+            
+            # Lower brightness (0x05FF to 0x05F1)
+            elif cmd_type == 0x05:
+                step = 256 - cmd_value  # 0xFF=1, 0xFE=2, ..., 0xF1=15
+                if 1 <= step <= 15:
+                    # Lower brightness
+                    brightness_change = step * 255 / 15 / 15
+                    self.current_brightness = max(0, self.current_brightness - brightness_change)
+                    print(f"Brightness lower: {self.current_brightness}")
+                    self.publish_state()
+            
+            # Reset (0x0600)
+            elif cmd_type == 0x06:
+                # Reset to medium brightness and warm color
+                self.current_brightness = 128
+                self.current_temperature = 153  # Warm
+                print("Reset to defaults")
+                self.publish_state()
+
+    def knob_listener(self):
+        """Background thread to listen for knob commands"""
+        print("Knob listener thread started")
+        # Initial configuration for RX
+        self.configure_radio_for_rx()
+        
+        while self.listener_running:
+            try:
+                with self.radio_lock:
+                    if self.rx_radio.listen:  # Only check if in RX mode
+                        has_payload, pipe_number = self.rx_radio.available_pipe()
+                        if has_payload:
+                            received = self.rx_radio.read(self.rx_radio.payload_size)
+                            packet = decode_packet(received)
+                            if validate_packet_crc(packet):
+                                self.process_knob_command(packet["command"])
+                            else:
+                                print("Received packet with invalid CRC, ignoring")
+                time.sleep(0.05)  # 50ms polling interval
+            except Exception as e:
+                print(f"Error in knob listener: {e}")
+                time.sleep(0.1)
+        print("Knob listener thread stopped")
 
     def start(self):
         try:
             self.client.connect(self.broker, self.port, 60)
             self.client.loop_start()
+            
+            # Start knob listener thread
+            self.listener_running = True
+            self.listener_thread = threading.Thread(target=self.knob_listener, daemon=True)
+            self.listener_thread.start()
+            print("Knob listener initialized")
         except Exception as e:
             print(f"Failed to connect to MQTT broker: {e}")
 
     def stop(self):
+        # Stop knob listener thread
+        if self.listener_thread is not None:
+            self.listener_running = False
+            self.listener_thread.join(timeout=2)
+        
         self.client.loop_stop()
         self.client.disconnect()
 
@@ -125,7 +327,7 @@ def scale_value(t):
 
 def main():
     try:
-        with MqttController(BROKER, PORT, USERNAME, PASSWORD, TOPIC, lightbar) as controller:
+        with MqttController(BROKER, PORT, USERNAME, PASSWORD, TOPIC, lightbar, CE_PIN, CSN_PIN) as controller:
             controller.start()
             import time
             while True:  # Keep the program running
