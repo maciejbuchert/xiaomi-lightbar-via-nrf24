@@ -134,7 +134,9 @@ class MqttController:
             self.rx_radio.payload_size = 12
             self.rx_radio.address_width = 5
             self.rx_radio.set_auto_ack(False)
-            self.rx_radio.open_rx_pipe(1, preamble >> self.PREAMBLE_SHIFT_BITS)  # 5 first bytes of preamble
+            # Convert address to bytes to avoid deprecation warning
+            address = (preamble >> self.PREAMBLE_SHIFT_BITS).to_bytes(5, 'big')
+            self.rx_radio.open_rx_pipe(1, address)  # 5 first bytes of preamble
             self.rx_radio.listen = True
     
     def configure_radio_for_tx(self):
