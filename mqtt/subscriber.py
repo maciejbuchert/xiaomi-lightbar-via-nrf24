@@ -219,35 +219,39 @@ class MqttController:
             cmd_type = (command >> 8) & 0xFF
             cmd_value = command & 0xFF
             
+            print(f"  Command type: {hex(cmd_type)}, value: {hex(cmd_value)}")
+            
             # On/Off toggle (0x0100)
             if cmd_type == 0x01:
                 # Toggle state
+                old_state = self.previous_control_state
                 if self.previous_control_state == "ON":
                     self.previous_control_state = "OFF"
                 else:
                     self.previous_control_state = "ON"
-                print(f"State toggled to: {self.previous_control_state}")
+                print(f"  State toggled: {old_state} → {self.previous_control_state}")
                 self.publish_state()
             
             # Cooler color temperature (0x0201 to 0x020F)
+            # Cooler = more blue/cool = lower mireds (towards 153 = 6500K)
             elif cmd_type == 0x02:
                 step = cmd_value
                 if 1 <= step <= self.MAX_STEPS:
-                    # Cooler means higher temperature value
-                    # Calculate change: step size proportional to the step value
+                    # Cooler means LOWER temperature value in mireds
                     temp_change = step * self.TEMP_RANGE // self.STEP_DIVISOR
-                    self.current_temperature = int(min(370, self.current_temperature + temp_change))
-                    print(f"Temperature cooler: {self.current_temperature}")
+                    self.current_temperature = int(max(153, self.current_temperature - temp_change))
+                    print(f"Temperature cooler (step {step}): {self.current_temperature} mireds")
                     self.publish_state()
             
             # Warmer color temperature (0x03FF to 0x03F1)
+            # Warmer = more yellow/warm = higher mireds (towards 370 = 2700K)
             elif cmd_type == 0x03:
                 step = 256 - cmd_value  # 0xFF=1, 0xFE=2, ..., 0xF1=15
                 if 1 <= step <= self.MAX_STEPS:
-                    # Warmer means lower temperature value
+                    # Warmer means HIGHER temperature value in mireds
                     temp_change = step * self.TEMP_RANGE // self.STEP_DIVISOR
-                    self.current_temperature = int(max(153, self.current_temperature - temp_change))
-                    print(f"Temperature warmer: {self.current_temperature}")
+                    self.current_temperature = int(min(370, self.current_temperature + temp_change))
+                    print(f"Temperature warmer (step {step}): {self.current_temperature} mireds")
                     self.publish_state()
             
             # Higher brightness (0x0401 to 0x040F)
@@ -256,8 +260,9 @@ class MqttController:
                 if 1 <= step <= self.MAX_STEPS:
                     # Higher brightness
                     brightness_change = step * self.BRIGHTNESS_RANGE // self.STEP_DIVISOR
+                    old_brightness = self.current_brightness
                     self.current_brightness = int(min(self.BRIGHTNESS_RANGE, self.current_brightness + brightness_change))
-                    print(f"Brightness higher: {self.current_brightness}")
+                    print(f"  Brightness higher (step {step}): {old_brightness} → {self.current_brightness} (+{brightness_change})")
                     self.publish_state()
             
             # Lower brightness (0x05FF to 0x05F1)
@@ -266,8 +271,9 @@ class MqttController:
                 if 1 <= step <= self.MAX_STEPS:
                     # Lower brightness
                     brightness_change = step * self.BRIGHTNESS_RANGE // self.STEP_DIVISOR
+                    old_brightness = self.current_brightness
                     self.current_brightness = int(max(0, self.current_brightness - brightness_change))
-                    print(f"Brightness lower: {self.current_brightness}")
+                    print(f"  Brightness lower (step {step}): {old_brightness} → {self.current_brightness} (-{brightness_change})")
                     self.publish_state()
             
             # Reset (0x0600)
@@ -275,8 +281,12 @@ class MqttController:
                 # Reset to medium brightness and warm color
                 self.current_brightness = 128
                 self.current_temperature = 153  # Warm
-                print("Reset to defaults")
+                print("  Reset to defaults: brightness=128, temperature=153")
                 self.publish_state()
+            
+            # Unknown command type
+            else:
+                print(f"  WARNING: Unknown command type {hex(cmd_type)}")
 
     def knob_listener(self):
         """Background thread to listen for knob commands"""
