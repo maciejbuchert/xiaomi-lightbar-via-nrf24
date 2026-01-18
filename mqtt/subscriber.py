@@ -115,6 +115,12 @@ class MqttController:
         # We'll configure it for RX when not transmitting
         self.rx_radio = self.lightbar.radio
         
+        # Setup RX pipe once during initialization
+        # Convert address to bytes to avoid deprecation warning
+        rx_address = (preamble >> self.PREAMBLE_SHIFT_BITS).to_bytes(5, 'big')
+        self.rx_radio.open_rx_pipe(1, rx_address)
+        print(f"RX pipe configured with address: {rx_address.hex()}")
+        
         # Thread control
         self.listener_thread = None
         self.listener_running = False
@@ -134,9 +140,7 @@ class MqttController:
             self.rx_radio.payload_size = 12
             self.rx_radio.address_width = 5
             self.rx_radio.set_auto_ack(False)
-            # Convert address to bytes to avoid deprecation warning
-            address = (preamble >> self.PREAMBLE_SHIFT_BITS).to_bytes(5, 'big')
-            self.rx_radio.open_rx_pipe(1, address)  # 5 first bytes of preamble
+            # Note: RX pipe is opened once during __init__, no need to reopen
             self.rx_radio.listen = True
     
     def configure_radio_for_tx(self):
